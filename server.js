@@ -3,6 +3,7 @@ import multer from "multer";
 import fs from "fs";
 import cors from "cors";
 import OpenAI from "openai";
+fs.mkdirSync("uploads", { recursive: true });
 
 const app = express();
 const upload = multer({ dest: "uploads/" });
