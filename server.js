@@ -12,8 +12,8 @@ const app = express();
 // CORS (ajusta TU_USUARIO de GitHub Pages)
 app.use(cors({
   origin: [
-    "https://TU_USUARIO.github.io",
-    "https://TU_USUARIO.github.io/compapol-movil/"
+    "https://https://gtd-tfs.github.io",
+    "https://https://gtd-tfs.github.io//compapol-movil/"
   ],
   methods: ["GET","POST","OPTIONS"],
   allowedHeaders: ["Content-Type"]
