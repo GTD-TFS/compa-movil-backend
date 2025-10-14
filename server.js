@@ -3,30 +3,58 @@ import multer from "multer";
 import fs from "fs";
 import cors from "cors";
 import OpenAI from "openai";
+
+// Crear carpeta de subidas si no existe
 fs.mkdirSync("uploads", { recursive: true });
 
 const app = express();
-const upload = multer({ dest: "uploads/" });
 
-app.use(cors()); // de momento abierto; luego afinamos orígenes
-app.use(express.json({ limit: "20mb" }));
+// CORS (ajusta TU_USUARIO de GitHub Pages)
+app.use(cors({
+  origin: [
+    "https://TU_USUARIO.github.io",
+    "https://TU_USUARIO.github.io/compapol-movil/"
+  ],
+  methods: ["GET","POST","OPTIONS"],
+  allowedHeaders: ["Content-Type"]
+}));
+
+app.use(express.json({ limit: "25mb" }));
+
+const upload = multer({
+  dest: "uploads/",
+  limits: { fileSize: 25 * 1024 * 1024 } // 25 MB
+});
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// (Opcional) Salud
+app.get("/healthz", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
 // ---- Transcripción (Whisper) ----
 app.post("/api/whisper", upload.single("file"), async (req, res) => {
   try {
-    const filePath = req.file?.path;
-    if (!filePath) return res.status(400).json({ error: "No se recibió audio" });
+    if (!req.file) return res.status(400).json({ error: "No se recibió audio" });
+
+    const { path: filePath, originalname, mimetype, size } = req.file;
+    if (!size || size < 1000) {
+      fs.unlink(filePath, () => {});
+      return res.status(400).json({ error: "Audio demasiado corto o vacío" });
+    }
+
+    const rs = fs.createReadStream(filePath);
     const tr = await openai.audio.transcriptions.create({
-      file: fs.createReadStream(filePath),
+      file: rs,
       model: "whisper-1",
       language: "es"
     });
+
     fs.unlink(filePath, () => {});
     res.json({ text: tr.text || "" });
   } catch (err) {
-    res.status(500).json({ error: err.message || "Error en Whisper" });
+    // Intenta dar detalle si hubiera error del proveedor
+    const msg = (err && (err.message || err.error || err.toString())) || "Error en Whisper";
+    res.status(500).json({ error: msg });
   }
 });
 
@@ -52,7 +80,8 @@ Estructura con párrafos HTML (<p>...</p>) y cierre oficial.
     const html = completion?.choices?.[0]?.message?.content || "";
     res.json({ html });
   } catch (err) {
-    res.status(500).json({ error: err.message || "Error en redacción" });
+    const msg = (err && (err.message || err.error || err.toString())) || "Error en redacción";
+    res.status(500).json({ error: msg });
   }
 });
 
