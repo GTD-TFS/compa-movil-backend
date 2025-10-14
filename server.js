@@ -85,10 +85,11 @@ Estructura con párrafos HTML (<p>...</p>) y cierre oficial.
 `.trim();
 
     const body = {
-      model: "llama3-70b-8192",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.4
-    };
+  model: "llama-3.3-70b-versatile",   // modelo válido en Groq
+  messages: [{ role: "user", content: prompt }],
+  temperature: 0.2                    // un poco más formal
+};
+
 
     const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
