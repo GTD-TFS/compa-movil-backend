@@ -1,99 +1,68 @@
-// server.js — Compapol backend (Groq gratis, estilo policial fijo + few-shots)
+// server.js — Compapol backend (Groq gratis, estilo “— Que …”, inserción de fichas en “el/la llamado/a”)
 
 import express from "express";
 import multer from "multer";
 import fs from "node:fs";
 import cors from "cors";
 
-// ======== Estilo fijo (system) + few-shots compactos ========
 const ESTILO_POLICIAL = `
-Objetivo: redactar una "Comparecencia de Funcionarios" (España) fiel a lo dictado.
-Reglas:
-- Tono: impersonal, objetivo y formal. Tercera persona del plural (“los funcionarios actuantes…”, “estos agentes…”).
-- Inicio: comisión por Sala CIMACC-091 o patrullaje ordinario, según se desprenda del dictado (no inventar).
-- Estructura en párrafos HTML (<p>...</p>) sin bloques de código:
-  <p><strong>Comparecencia de Funcionarios</strong></p>
-  <p>— Que ... [exposición de hechos iniciales: comisión/patrullaje, lugar y hora si constan].</p>
-  <p><strong>Entrevistas/Manifiestos:</strong> — Que ...</p>
-  <p><strong>Actuación policial:</strong> — Que ... (se procede a ... informando de derechos, fuerza mínima indispensable, etc.)</p>
-  <p><strong>Efectos intervenidos:</strong> — Que ...</p>
-  <p><strong>Asistencia/Traslado:</strong> — Que ...</p>
-  <p><strong>Autoridad/Judicial:</strong> — Que ...</p>
-  <p>Y para que así conste, se firma la presente en [LOCALIDAD], a [FECHA].</p>
-- Formato: fechas dd/mm/aaaa; horas 24 h (09:05, 17:30).
-- Si un dato no aparece en el dictado, indicar [NO CONSTA] o [DATOS RESERVADOS]. No inventar.
-- Mantener expresiones típicas: “— Que …”, “se procede… no sin antes informar…”, “utilizando la fuerza mínima indispensable…”.
-- Salida: EXCLUSIVAMENTE HTML válido (sin \`\`\`, sin narración externa).
+Objetivo: redactar comparecencia fiel a lo dictado, en tercera persona del plural (“estos agentes…”, “los funcionarios actuantes…”), tono impersonal, objetivo y formal.
+
+Reglas estrictas:
+- NO insertar fecha ni hora (ni placeholders). Si aparecen en el dictado, OMITIRLAS.
+- NO usar rótulos (“Entrevistas/…”, “Actuación…”, etc.). NUNCA.
+- Salida SOLO en párrafos HTML: <p>— Que …</p>, tantos como sean necesarios.
+- Inicio: “— Que …” indicando comisión por 091 o patrullaje SOLO si se desprende del dictado (no inventar).
+- Describir entrevistas, actuaciones, aprehensiones, etc., en “— Que …”.
+- Fórmula preferente en detención: “se procede a su detención, informándole de sus derechos y de los motivos de ésta”.
+- Nada de coletillas finales (“se instruyen diligencias…”, “Y para que así conste…”). Termina cuando acaben los hechos/actuaciones.
+- Si un dato esencial falta, omitir el fragmento (no usar [NO CONSTA]).
+- Salida: exclusivamente HTML válido, sin bloques de código ni comillas invertidas.
 `.trim();
 
+// === Few-shots sin rótulos ===
 const FEW_SHOTS = [
   {
-    entrada: `Comisionados por 091 a centro educativo por posible agresión a menor; docente observa lesión; menor dice “chupetón”; se informa de 016; se detiene al varón relacionado.`,
+    entrada: `Comisionados por 091 a centro educativo; posible agresión; docente observa lesión; menor dice “chupetón”; se informa 016; detención del varón.`,
     salida: `
-<p><strong>Comparecencia de Funcionarios</strong></p>
-<p>— Que, comisionados por la Sala CIMACC-091, los funcionarios actuantes se personan en un centro educativo ante aviso de posible agresión a una menor, en fecha [NO CONSTA] y siendo las [NO CONSTA] horas.</p>
-<p><strong>Entrevistas/Manifiestos:</strong> — Que la docente refiere observar lesión compatible con moratón; la menor manifiesta que se trata de un “chupetón”.</p>
-<p><strong>Actuación policial:</strong> — Que se informa de recursos (016) y derechos; por indicios de malos tratos se procede a la detención del varón relacionado, informándole de derechos y motivo de la detención.</p>
-<p><strong>Efectos intervenidos:</strong> — Que [NO CONSTA].</p>
-<p><strong>Asistencia/Traslado:</strong> — Que se valora asistencia facultativa.</p>
-<p><strong>Autoridad/Judicial:</strong> — Que se instruyen diligencias y se pone lo actuado a disposición judicial.</p>
+<p>— Que, comisionados por la Sala CIMACC-091, estos agentes se personan en un centro educativo ante aviso de posible agresión a una menor.</p>
+<p>— Que la docente refiere observar lesión compatible con moratón; la menor manifiesta que se trata de un “chupetón”.</p>
+<p>— Que se informa a la posible víctima de recursos (016) y derechos; por indicios de malos tratos se procede a la detención del varón relacionado, informándole de sus derechos y de los motivos de ésta.</p>
 `.trim()
   },
   {
-    entrada: `Patrullaje por zona de ocio; observan manipulación de sustancia en bolsitas; 7 bolsas zip; refieren “vender a 30–50 €”; detención; pesaje en comisaría.`,
+    entrada: `Patrullaje; observan fraccionamiento de sustancia; 7 bolsas zip; refieren que venden a 30–50 €; detención; pesaje en dependencia.`,
     salida: `
-<p><strong>Comparecencia de Funcionarios</strong></p>
-<p>— Que, realizando labores propias de su cargo en servicio de prevención por zona de ocio, estos agentes observan a dos varones fraccionando sustancia pulverulenta en bolsas tipo zip, en fecha [NO CONSTA] y siendo las [NO CONSTA] horas.</p>
-<p><strong>Efectos intervenidos:</strong> — Que se incautan SIETE (7) bolsas tipo zip y útiles de fraccionamiento.</p>
-<p><strong>Entrevistas/Manifiestos:</strong> — Que los reseñados refieren “vender a 30–50 €”.</p>
-<p><strong>Actuación policial:</strong> — Que se procede a la detención por presunto delito contra la salud pública, informando de derechos.</p>
-<p><strong>Autoridad/Judicial:</strong> — Que en dependencias se realiza pesaje aproximado y se continúan diligencias.</p>
+<p>— Que, realizando labores propias de su cargo en servicio de prevención por zona de ocio, estos agentes observan a dos varones fraccionando sustancia pulverulenta en bolsas tipo zip.</p>
+<p>— Que se intervienen SIETE (7) bolsas tipo zip y útiles de fraccionamiento; los reseñados refieren “vender a 30–50 €”.</p>
+<p>— Que se procede a su detención, informándoles de sus derechos y de los motivos de ésta, continuando con las diligencias en dependencia policial para pesaje aproximado.</p>
 `.trim()
   }
 ];
-// ============================================================
 
-// --- Arranque / preparación
+// ======== Configuración base ========
 fs.mkdirSync("uploads", { recursive: true });
-
 const app = express();
-
-// CORS (en pruebas abierto; si quieres, restringe a tu GitHub Pages)
 app.use(cors());
-// app.use(cors({ origin: ["https://gtd-tfs.github.io", "https://gtd-tfs.github.io/compapol-movil"] }));
-
 app.use(express.json({ limit: "25mb" }));
 
 const upload = multer({
   dest: "uploads/",
-  limits: { fileSize: 25 * 1024 * 1024 } // 25 MB
+  limits: { fileSize: 25 * 1024 * 1024 }
 });
 
-// ---------- HEALTH ----------
 app.get("/healthz", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
-// ---------- TRANSCRIPCIÓN (Groq Whisper gratis) ----------
+// ======== Transcripción (Whisper Groq) ========
 app.post("/api/whisper", upload.single("file"), async (req, res) => {
   try {
-    if (!process.env.GROQ_API_KEY) {
-      return res.status(500).json({ error: "Falta GROQ_API_KEY en el servidor" });
-    }
+    if (!process.env.GROQ_API_KEY) return res.status(500).json({ error: "Falta GROQ_API_KEY" });
     if (!req.file) return res.status(400).json({ error: "No se recibió audio" });
 
-    const { path: filePath, originalname, mimetype, size } = req.file;
-    if (!size || size < 1000) {
-      fs.unlink(filePath, () => {});
-      return res.status(400).json({ error: "Audio demasiado corto o vacío" });
-    }
-
-    // Node 20+: FormData/Blob nativos -> necesitan Blob/File, no stream
-    const buf = fs.readFileSync(filePath);
-    const filename = originalname || "grabacion.m4a";
-    const type = mimetype || "audio/m4a";
-    const blob = new Blob([buf], { type });
-
+    const buf = fs.readFileSync(req.file.path);
+    const blob = new Blob([buf], { type: req.file.mimetype || "audio/m4a" });
     const form = new FormData();
-    form.append("file", blob, filename);
+    form.append("file", blob, req.file.originalname || "grabacion.m4a");
     form.append("model", "whisper-large-v3");
     form.append("language", "es");
 
@@ -104,40 +73,55 @@ app.post("/api/whisper", upload.single("file"), async (req, res) => {
     });
 
     const data = await r.json();
-    fs.unlink(filePath, () => {});
-
-    if (!r.ok) {
-      return res.status(r.status).json({ error: data?.error?.message || "Error en transcripción (Groq)" });
-    }
+    fs.unlink(req.file.path, () => {});
+    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || "Error en transcripción (Groq)" });
 
     res.json({ text: data.text || "" });
   } catch (err) {
-    res.status(500).json({ error: err?.message || "Error en Whisper (Groq)" });
+    res.status(500).json({ error: err.message || "Error en Whisper" });
   }
 });
 
-// ---------- REDACCIÓN POLICIAL (Groq Llama3 gratis + estilo) ----------
+// ======== Redacción policial (Groq) ========
 app.post("/api/police-draft", async (req, res) => {
   try {
-    if (!process.env.GROQ_API_KEY) {
-      return res.status(500).json({ error: "Falta GROQ_API_KEY en el servidor" });
-    }
+    if (!process.env.GROQ_API_KEY) return res.status(500).json({ error: "Falta GROQ_API_KEY" });
 
-    const { texto = "", filiaciones = [], objetos = [] } = req.body || {};
+    const { texto = "", filiaciones = [], objetos = [], fichas_resueltas = [] } = req.body || {};
+
+    // --- Nueva lógica: inserción literal en “el/la llamado/a + nombre” ---
+    const instruccionesFichas = `
+Si en el texto aparece una expresión del tipo:
+- “el llamado [nombre]” o “la llamada [nombre]”,
+busca en las fichas resueltas si existe alguna con ese nombre (ignorando mayúsculas/minúsculas y acentos).
+
+Cuando se detecte:
+- Sustituye esa expresión completa (“el llamado Conor”, “la llamada María”) por:
+  - "el llamado" o "la llamada" + la ficha literal correspondiente en formato:
+    Nombre APELLIDOS, indocumentado/a (o documento), nacido/a en [lugar] el [fecha], hijo/a de [padres], domicilio en [calle], teléfono [número].
+- Si faltan datos en la ficha (por ejemplo no hay teléfono o padres), omite esas partes sin dejar huecos ni etiquetas.
+
+Si no hay coincidencia, deja la expresión tal como está.
+`.trim();
 
     const userPrompt = `
-Dictado del agente (texto libre, puede incluir fechas/horas/lugares o no):
+Dictado del agente:
 """${texto}"""
 
-Datos estructurados de apoyo (si existen; no inventar):
+Datos de apoyo:
 - Filiaciones: ${JSON.stringify(filiaciones)}
 - Objetos: ${JSON.stringify(objetos)}
+- Fichas resueltas:
+${fichas_resueltas.map(x => `• ${x}`).join("\n")}
 
 Instrucciones:
-- Redacta la comparecencia siguiendo la guía de estilo y los ejemplos.
-- Usa SOLAMENTE la información aportada. Si falta un dato, pon [NO CONSTA].
-- Si del dictado se desprende comisión por 091, indícalo; si se desprende patrullaje, indícalo (no asumas ambos).
-- Salida: solo HTML válido, con párrafos “— Que …” y bloques en <strong>...</strong>. Sin \`\`\`.
+${instruccionesFichas}
+
+Reglas de redacción:
+- Redacta exclusivamente en párrafos <p>— Que …</p>.
+- Sin rótulos, sin fecha/hora, sin coletillas finales.
+- No inventes nada. Si falta algo, omítelo.
+- Salida: HTML válido, sin \`\`\`.
 `.trim();
 
     const messages = [
@@ -165,20 +149,23 @@ Instrucciones:
     });
 
     const data = await r.json();
-    if (!r.ok) {
-      return res.status(r.status).json({ error: data?.error?.message || "Error en redacción (Groq)" });
-    }
+    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || "Error en redacción" });
 
     let html = (data.choices?.[0]?.message?.content || "").trim();
-    // Limpieza por si el modelo añadiera fences por accidente
     html = html.replace(/```html|```/g, "").trim();
+
+    html = html
+      .split(/\n+/)
+      .filter(l => !/^<p><strong>/i.test(l) && !/Y para que as[ií] conste/i.test(l) && !/se instruyen diligencias/i.test(l))
+      .join("\n")
+      .trim();
 
     res.json({ html });
   } catch (err) {
-    res.status(500).json({ error: err?.message || "Error en redacción (Groq)" });
+    res.status(500).json({ error: err.message || "Error en redacción" });
   }
 });
 
-// ---------- Inicio ----------
+// ======== Inicio ========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Backend Compapol (Groq) escuchando en :${PORT}`));
